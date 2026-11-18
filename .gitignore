@@ -218,3 +218,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Trip planner additions ---
+# secrets
+.env
+*.key
+*.key.pub
+*.pem
+# local data
+.venv/
+**/.venv/
+.cache/
+**/.cache/
+.ipynb_checkpoints/
+.DS_Store
