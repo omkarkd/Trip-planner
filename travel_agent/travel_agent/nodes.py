@@ -24,6 +24,8 @@ from .tools import (
     country_code_of_airport,
     country_name,
     find_airport_for_city,
+    find_date_in_text,
+    find_origin_in_text,
     flight_tool,
     is_country,
     is_valid_iata,
@@ -100,15 +102,18 @@ def extract_trip(state: TravelState) -> dict:
     t = get_extract_llm().with_structured_output(TripQuery).invoke(EXTRACT_PROMPT.format(query=query))
     log.info("extracted: %s", t)
 
+    # Origin: model -> text rules ("from X", "X to Y") -> default.
     from_code = (t.from_iata or "").upper()
     if not is_valid_iata(from_code):
-        from_code = config.DEFAULT_ORIGIN
+        from_code = find_origin_in_text(query) or config.DEFAULT_ORIGIN
 
+    # Date: model -> text rules (2026-12-20, 20/12/2026, 20 December) -> today + N days.
     dep_date = t.departure_date
     try:
         date.fromisoformat(dep_date or "")
     except ValueError:
-        dep_date = (date.today() + timedelta(days=config.DEFAULT_DAYS_AHEAD)).isoformat()
+        dep_date = find_date_in_text(query) or \
+            (date.today() + timedelta(days=config.DEFAULT_DAYS_AHEAD)).isoformat()
 
     # Decide the request type in code (small models mislabel this).
     dest = (t.destination or "").strip() or None
@@ -125,10 +130,17 @@ def extract_trip(state: TravelState) -> dict:
     days = t.trip_days if t.trip_days and 1 <= t.trip_days <= 30 else config.DEFAULT_TRIP_DAYS
     month = int(dep_date[5:7])
 
+    # Keep the place the user asked for ("Goa"), adding the country from the airport ("Goa, India"),
+    # rather than the airport's town ("Dabolim").
+    dest_name = dest
+    if dtype == "city" and to_code and dest and "," not in dest:
+        cname = country_name(country_code_of_airport(to_code))
+        dest_name = dest.title() if not cname or cname.lower() == dest.lower() else f"{dest.title()}, {cname}"
+
     result = {
         "from_iata": from_code,
         "destination_type": dtype,
-        "destination_name": airport_to_place(to_code) if dtype == "city" and to_code else dest,
+        "destination_name": dest_name,
         "to_iata": to_code,
         "departure_date": dep_date,
         "trip_days": days,

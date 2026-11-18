@@ -81,6 +81,11 @@ PREFERRED_CITY_AIRPORT: dict[str, str] = {
     "bengaluru": "BLR", "kolkata": "CCU", "chennai": "MAA", "goa": "GOI", "jaipur": "JAI",
     "dubai": "DXB", "istanbul": "IST", "bangkok": "BKK", "kuala lumpur": "KUL", "singapore": "SIN",
     "sydney": "SYD", "toronto": "YYZ", "edinburgh": "EDI", "manchester": "MAN", "glasgow": "GLA",
+    "birmingham": "BHX", "bristol": "BRS", "newcastle": "NCL", "belfast": "BFS", "liverpool": "LPL",
+    # airport names people type instead of cities
+    "gatwick": "LGW", "heathrow": "LHR", "stansted": "STN", "luton": "LTN", "london city": "LCY",
+    "southend": "SEN", "jfk": "JFK", "newark": "EWR", "charles de gaulle": "CDG", "narita": "NRT",
+    "haneda": "HND", "dabolim": "GOI",
 }
 
 
