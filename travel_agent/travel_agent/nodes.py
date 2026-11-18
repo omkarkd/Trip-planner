@@ -46,14 +46,14 @@ class TripQuery(BaseModel):
     departure_date: str | None = Field(None, description="YYYY-MM-DD if mentioned, else null.")
     trip_days: int | None = Field(None, description="Number of trip days if mentioned, else null.")
 
-    @field_validator("from_iata", "destination", "to_iata", "departure_date", "trip_days", mode="before")    
+    # Small models often return the TEXT "null"/"none"/"" instead of a real null.
+    @field_validator("from_iata", "destination", "to_iata", "departure_date", "trip_days", mode="before")
     @classmethod
     def _text_null_to_none(cls, v):
-
-            
         if isinstance(v, str) and v.strip().lower() in _NULL_STRINGS:
             return None
         return v
+
 
 class DestinationPick(BaseModel):
     destination_name: str = Field(description="City or region, country")
@@ -62,11 +62,12 @@ class DestinationPick(BaseModel):
 
 
 class Place(BaseModel):
+    # Defaults everywhere: a missing field from the model must not crash the graph.
     name: str
-    iata: str = Field(description="Nearest airport IATA code")
-    must_visit_rank: int = Field(description="1 = most must-visit")
-    best_months: list[int] = Field(description="Best months to visit, numbers 1-12")
-    reason: str
+    iata: str | None = Field(None, description="3-letter IATA code of the nearest airport (e.g. GOI), not the place name")
+    must_visit_rank: int = Field(99, description="1 = most must-visit")
+    best_months: list[int] = Field(default_factory=list, description="Only the 3-6 best months to visit, numbers 1-12")
+    reason: str = ""
 
 
 class CountryPlaces(BaseModel):
@@ -175,6 +176,27 @@ considering weather, daylight and seasonal events. Give its nearest airport IATA
     }
 
 
+def _rank_places(country: str, research: str, attempts: int = 2) -> list[dict]:
+    """Ask the model for ranked places; retry once on bad output; return [] if it keeps failing."""
+    prompt = f"""Using the research below and your knowledge, list 6-8 notable places to visit in {country}.
+For EVERY place give all five fields:
+- name
+- iata: the 3-letter code of the nearest airport (e.g. GOI for Goa, JAI for Jaipur, SXR for Srinagar). Never the place name.
+- must_visit_rank: 1 = top
+- best_months: only the 3-6 genuinely best months (numbers 1-12), not every month
+- reason: one short sentence
+
+Research:
+{research}"""
+    llm = get_itinerary_llm().with_structured_output(CountryPlaces)
+    for attempt in range(1, attempts + 1):
+        try:
+            return [p.model_dump() for p in llm.invoke(prompt).places]
+        except Exception as exc:   # parse/validation errors from small models
+            log.warning("place ranking attempt %d/%d failed: %s", attempt, attempts, str(exc)[:200])
+    return []
+
+
 def plan_country(state: TravelState) -> dict:
     """Country only: research, rank by must-visit, keep in-season places, split days."""
     country = state["destination_name"]
@@ -182,18 +204,23 @@ def plan_country(state: TravelState) -> dict:
     month = month_name(month_num)
 
     research = search_places(country, month)
-    result = get_itinerary_llm().with_structured_output(CountryPlaces).invoke(
-        f"""Using the research below and your knowledge, list 6-8 notable places to visit in {country}.
-Rank them by must-visit (1 = top) and give the best months to visit each (numbers 1-12).
+    places = _rank_places(country, research)
 
-Research:
-{research}"""
-    )
+    if not places:  # model failed twice: plan the whole trip for the country as one stop
+        log.warning("no ranked places for %s; using a single-stop fallback", country)
+        stops = [{"name": country, "iata": None, "days": state["trip_days"],
+                  "reason": "general trip (ranking unavailable)"}]
+        return {"plan_stops": stops, "to_iata": None, "llm_calls": 2}
 
-    places = [p.model_dump() for p in result.places]
-    in_season = [p for p in places if month_num in p["best_months"]] or places
-    in_season.sort(key=lambda p: p["must_visit_rank"])
-    stops = allocate_days(in_season, state["trip_days"])
+    def in_season(p: dict) -> bool:
+        months = [m for m in p.get("best_months") or [] if 1 <= m <= 12]
+        if not months or len(months) >= 10:      # no data, or "every month" = no real signal
+            return True
+        return month_num in months
+
+    candidates = [p for p in places if in_season(p)] or places
+    candidates.sort(key=lambda p: p.get("must_visit_rank", 99))
+    stops = allocate_days(candidates, state["trip_days"])
 
     for s in stops:
         code = (s.get("iata") or "").upper()
